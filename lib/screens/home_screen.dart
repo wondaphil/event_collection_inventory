@@ -18,6 +18,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> categories = [];
   int? selectedCategoryId;
   String searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -33,25 +34,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadItems() async {
-    final db = DatabaseHelper.instance;
-    final result = await db.database.then((dbConn) => dbConn.rawQuery('''
-      SELECT i.id, i.code, i.name, i.description, i.categoryId,
-             c.name AS category,
-             IFNULL(SUM(CASE WHEN t.type='IN' THEN t.quantity
-                             WHEN t.type='OUT' THEN -t.quantity ELSE 0 END), 0)
-             AS stock
-      FROM items i
-      LEFT JOIN categories c ON i.categoryId = c.id
-      LEFT JOIN stock_transactions t ON i.id = t.itemId
-      GROUP BY i.id
-      ORDER BY i.name COLLATE NOCASE ASC
-    '''));
+	  final db = DatabaseHelper.instance;
+	  final result = await db.database.then((dbConn) => dbConn.rawQuery('''
+		SELECT 
+		  i.id, 
+		  i.code, 
+		  i.name, 
+		  i.description, 
+		  i.categoryId,
+		  c.name AS category,
+		  IFNULL(SUM(
+			CASE 
+			  WHEN t.type = 'IN' THEN t.quantity 
+			  WHEN t.type = 'OUT' THEN -t.quantity 
+			  ELSE 0 
+			END
+		  ), 0) AS stock,
+		  COUNT(t.id) AS tx_count
+		FROM items i
+		LEFT JOIN categories c ON i.categoryId = c.id
+		LEFT JOIN stock_transactions t ON i.id = t.itemId
+		GROUP BY i.id
+		ORDER BY i.name COLLATE NOCASE ASC
+	  '''));
 
-    setState(() {
-      allItems = result;
-      _applyFilters();
-    });
-  }
+	  setState(() {
+		allItems = result;
+		_applyFilters();
+	  });
+	}
   
   Future<void> _editItem(Map<String, dynamic> item) async {
 	  final nameCtrl = TextEditingController(text: item['name']);
@@ -70,6 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
 	  final updated = await showDialog<bool>(
 		context: context,
+		barrierDismissible: false,
 		builder: (context) => AlertDialog(
 		  title: const Text('Edit Item'),
 		  content: SingleChildScrollView(
@@ -184,7 +196,8 @@ class _HomeScreenState extends State<HomeScreen> {
             item['categoryId'] == selectedCategoryId;
         final matchesSearch = searchQuery.isEmpty ||
             (item['name']?.toLowerCase().contains(searchQuery.toLowerCase()) ?? false) ||
-            (item['code']?.toLowerCase().contains(searchQuery.toLowerCase()) ?? false);
+            (item['code']?.toLowerCase().contains(searchQuery.toLowerCase()) ?? false) ||
+            (item['description']?.toLowerCase().contains(searchQuery.toLowerCase()) ?? false);
         return matchesCategory && matchesSearch;
       }).toList();
     });
@@ -254,22 +267,38 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             // 🔍 Search Field
             TextField(
-              decoration: InputDecoration(
-                hintText: 'Search by name or code',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 8),
-              ),
-              onChanged: (value) {
-                searchQuery = value;
-                _applyFilters();
-              },
-            ),
+			  controller: _searchController,
+			  decoration: InputDecoration(
+				hintText: 'Search',
+				prefixIcon: const Icon(Icons.search),
+				suffixIcon: _searchController.text.isNotEmpty
+					? IconButton(
+						icon: const Icon(Icons.clear),
+						onPressed: () {
+						  setState(() {
+							_searchController.clear();
+							searchQuery = ''; // ✅ Reset search filter
+							_applyFilters();   // ✅ Refresh list
+						  });
+						  FocusScope.of(context).unfocus(); // Close keyboard
+						},
+					  )
+					: null,
+				filled: true,
+				fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+				border: OutlineInputBorder(
+				  borderRadius: BorderRadius.circular(12),
+				  borderSide: BorderSide.none,
+				),
+				contentPadding: const EdgeInsets.symmetric(vertical: 8),
+			  ),
+			  onChanged: (value) {
+				setState(() {
+				  searchQuery = value;
+				});
+				_applyFilters();
+			  },
+			),
             const SizedBox(height: 8),
 
             // 🗂️ Category Filter Dropdown
@@ -307,6 +336,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       thumbVisibility: true,
                       radius: const Radius.circular(12),
                       child: ListView.separated(
+					    padding: const EdgeInsets.only(bottom: 90), 
                         itemCount: filteredItems.length,
                         separatorBuilder: (_, __) =>
                             const Divider(height: 1, thickness: 0.2),
@@ -323,12 +353,18 @@ class _HomeScreenState extends State<HomeScreen> {
 								  if (item['description'] != null && item['description'].toString().isNotEmpty)
 									Text(item['description'], style: const TextStyle(color: Colors.black54)),
 								  Text(
-									'Stock: ${item['stock']}',
-									style: TextStyle(
-									  color: item['stock'] > 0 ? Colors.green : Colors.redAccent,
-									  fontWeight: FontWeight.w500,
+									  item['tx_count'] == 0
+										  ? 'No transactions yet'
+										  : (item['stock'] == 0
+											  ? 'Out of stock'
+											  : 'Stock: ${item['stock']}'),
+									  style: TextStyle(
+										color: item['tx_count'] == 0
+											? Colors.grey
+											: (item['stock'] > 0 ? Colors.green : Colors.redAccent),
+										fontWeight: FontWeight.w500,
+									  ),
 									),
-								  ),
 								],
 							  ),
 							onTap: () {

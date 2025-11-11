@@ -78,6 +78,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
 
     final saved = await showDialog<bool>(
       context: context,
+	  barrierDismissible: false,
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) => AlertDialog(
           title: Text(tx == null ? 'Add Stock Transaction' : 'Edit Transaction'),
@@ -372,81 +373,76 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               child: transactions.isEmpty
                   ? const Center(child: Text('No stock transactions yet'))
                   : ListView.builder(
-                      itemCount: transactions.length,
-                      itemBuilder: (context, index) {
-                        final tx = transactions[index];
-                        final isIn = tx['type'] == 'IN';
-                        final qty = tx['quantity'];
-                        final notes = tx['notes'] ?? '';
-                        final date = _toEthiopianText(tx['date']);
+					  padding: EdgeInsets.only(
+						bottom: MediaQuery.of(context).padding.bottom + 120, // 👈 enough for 2 FABs
+					  ),
+					  itemCount: transactions.length,
+					  itemBuilder: (context, index) {
+						final tx = transactions[index];
+						final isIn = tx['type'] == 'IN';
+						final qty = tx['quantity'];
+						final notes = tx['notes'] ?? '';
+						final date = _toEthiopianText(tx['date']);
 
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: ListTile(
-                            leading: Icon(
-                              isIn
-                                  ? Icons.arrow_downward
-                                  : Icons.arrow_upward,
-                              color: isIn
-                                  ? Colors.teal
-                                  : Colors.redAccent,
-                            ),
-                            title: Text(
-                              '${isIn ? '+' : '-'}$qty pcs',
-                              style: TextStyle(
-                                color: isIn
-                                    ? Colors.teal
-                                    : Colors.redAccent,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            subtitle: Text(
-                              notes.isEmpty ? date : '$date\n$notes',
-                              style: const TextStyle(height: 1.3),
-                            ),
-                            isThreeLine: notes.isNotEmpty,
-                            trailing: PopupMenuButton<String>(
-                              tooltip: 'More actions',
-                              onSelected: (value) {
-                                switch (value) {
-                                  case 'edit':
-                                    _openTransactionDialog(tx: tx);
-                                    break;
-                                  case 'delete':
-                                    _deleteTransaction(
-                                        tx['id'] as int);
-                                    break;
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                const PopupMenuItem(
-                                  value: 'edit',
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.edit_outlined, size: 20),
-                                      SizedBox(width: 8),
-                                      Text('Edit'),
-                                    ],
-                                  ),
-                                ),
-                                const PopupMenuItem(
-                                  value: 'delete',
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.delete_outline,
-                                          color: Colors.redAccent,
-                                          size: 20),
-                                      SizedBox(width: 8),
-                                      Text('Delete'),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+						return Card(
+						  margin: const EdgeInsets.symmetric(vertical: 4),
+						  child: ListTile(
+							leading: Icon(
+							  isIn ? Icons.arrow_downward : Icons.arrow_upward,
+							  color: isIn ? Colors.teal : Colors.redAccent,
+							),
+							title: Text(
+							  '${isIn ? '+' : '-'}$qty pcs',
+							  style: TextStyle(
+								color: isIn ? Colors.teal : Colors.redAccent,
+								fontWeight: FontWeight.w600,
+							  ),
+							),
+							subtitle: Text(
+							  notes.isEmpty ? date : '$date\n$notes',
+							  style: const TextStyle(height: 1.3),
+							),
+							isThreeLine: notes.isNotEmpty,
+							trailing: PopupMenuButton<String>(
+							  tooltip: 'More actions',
+							  onSelected: (value) {
+								switch (value) {
+								  case 'edit':
+									_openTransactionDialog(tx: tx);
+									break;
+								  case 'delete':
+									_deleteTransaction(tx['id'] as int);
+									break;
+								}
+							  },
+							  itemBuilder: (context) => [
+								const PopupMenuItem(
+								  value: 'edit',
+								  child: Row(
+									children: [
+									  Icon(Icons.edit_outlined, size: 20),
+									  SizedBox(width: 8),
+									  Text('Edit'),
+									],
+								  ),
+								),
+								const PopupMenuItem(
+								  value: 'delete',
+								  child: Row(
+									children: [
+									  Icon(Icons.delete_outline,
+										  color: Colors.redAccent, size: 20),
+									  SizedBox(width: 8),
+									  Text('Delete'),
+									],
+								  ),
+								),
+							  ],
+							),
+						  ),
+						);
+					  },
+					)
             ),
           ],
         ),

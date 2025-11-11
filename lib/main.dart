@@ -26,9 +26,16 @@ class InventoryApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
+        brightness: Brightness.light,
+		useMaterial3: true,
         appBarTheme: const AppBarTheme(centerTitle: true),
       ),
+	  darkTheme: ThemeData(
+		colorSchemeSeed: Colors.teal,
+		brightness: Brightness.dark,
+		useMaterial3: true,
+	  ),
+	  themeMode: ThemeMode.system, // follow system dark/light mode
       home: const SplashScreen(),
     );
   }
