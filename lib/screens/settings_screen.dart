@@ -21,106 +21,123 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return p.join(dbPath, 'inventory.db');
   }
 
-  // ✅ Export using SAF so user can pick "Downloads" or any folder
-  Future<void> _extractData() async {
-	  try {
+  // ✅ Export database (cross-platform)
+	Future<void> _extractData() async {
+	try {
 		final dbPath = await _getDatabasePath();
 		final dbFile = File(dbPath);
+
+		// Use different behavior per platform
+		if (Platform.isAndroid || Platform.isIOS) {
+		// 📱 Mobile: use bytes
 		final dbBytes = await dbFile.readAsBytes();
-
-		// Ask the user where to save it (system dialog)
 		final savedPath = await FilePicker.platform.saveFile(
-		  dialogTitle: 'Export inventory.db',
-		  fileName: 'inventory.db',
-		  bytes: dbBytes, // ✅ REQUIRED on Android/iOS
+			dialogTitle: 'Export inventory.db',
+			fileName: 'inventory.db',
+			bytes: dbBytes,
 		);
 
-		if (savedPath == null) return; // cancelled
+		if (savedPath == null) return;
 		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(content: Text('✅ Data exported to $savedPath')),
+			SnackBar(content: Text('✅ Data exported to $savedPath')),
 		);
-	  } catch (e) {
-		ScaffoldMessenger.of(context)
-			.showSnackBar(SnackBar(content: Text('Export failed: $e')));
-	  }
+		} else if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+		// 💻 Desktop: native save dialog
+		final result = await FilePicker.platform.saveFile(
+			dialogTitle: 'Export Database',
+			fileName: 'inventory.db',
+		);
+
+		if (result == null) return; // cancelled
+		await dbFile.copy(result);
+		ScaffoldMessenger.of(context).showSnackBar(
+			SnackBar(content: Text('✅ Database exported to: $result')),
+		);
+		} else {
+		throw UnsupportedError('Unsupported platform');
+		}
+	} catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(content: Text('Export failed: $e')),
+		);
+	}
 	}
 
-  // ✅ Import using SAF picker
-  Future<void> _importData() async {
-	  final result = await FilePicker.platform.pickFiles(
+	// ✅ Import database (cross-platform)
+	Future<void> _importData() async {
+	try {
+		final result = await FilePicker.platform.pickFiles(
 		dialogTitle: 'Select a database file',
 		type: FileType.any,
 		allowMultiple: false,
-	  );
-	  if (result == null) return;
+		);
+		if (result == null) return;
 
-	  final selected = File(result.files.single.path!);
+		final selectedPath = result.files.single.path!;
+		final selectedFile = File(selectedPath);
 
-	  // ✅ STEP 1: Validate it's an actual SQLite database
-	  bool isValid = false;
-	  try {
-		final db = await openDatabase(selected.path);
+		// Validate SQLite structure
+		bool isValid = false;
+		try {
+		final db = await openDatabase(selectedFile.path);
 		final tables = await db.rawQuery(
-			"SELECT name FROM sqlite_master WHERE type='table'");
+			"SELECT name FROM sqlite_master WHERE type='table'",
+		);
 		await db.close();
-
-		// Ensure it contains the expected tables
-		final tableNames =
-			tables.map((t) => t['name'] as String).toList(growable: false);
-		if (tableNames.contains('items') &&
-			tableNames.contains('categories') &&
-			tableNames.contains('stock_transactions')) {
-		  isValid = true;
-		}
-	  } catch (e) {
+		final names = tables.map((t) => t['name']).toList();
+		isValid = names.contains('items') &&
+			names.contains('categories') &&
+			names.contains('stock_transactions');
+		} catch (_) {
 		isValid = false;
-	  }
+		}
 
-	  if (!isValid) {
+		if (!isValid) {
 		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('❌ Invalid database file selected')),
+			const SnackBar(content: Text('❌ Invalid database file selected.')),
 		);
 		return;
-	  }
+		}
 
-	  // ✅ STEP 2: Confirm replacement
-	  final confirm = await showDialog<bool>(
+		// Confirm replacement
+		final confirm = await showDialog<bool>(
 		context: context,
 		builder: (_) => AlertDialog(
-		  title: const Text('Replace Existing Data?'),
-		  content: const Text(
-			  'This will overwrite your current database with the selected file. Continue?'),
-		  actions: [
-			TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-			FilledButton(
-			  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-			  onPressed: () => Navigator.pop(context, true),
-			  child: const Text('Replace'),
+			title: const Text('Replace Existing Database?'),
+			content: const Text(
+			'This will overwrite your current database with the selected file. Continue?',
 			),
-		  ],
+			actions: [
+			TextButton(
+				onPressed: () => Navigator.pop(context, false),
+				child: const Text('Cancel'),
+			),
+			FilledButton(
+				style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+				onPressed: () => Navigator.pop(context, true),
+				child: const Text('Replace'),
+			),
+			],
 		),
-	  );
+		);
 
-	  if (confirm != true) return;
+		if (confirm != true) return;
 
-	  // ✅ STEP 3: Replace app database safely
-	  try {
+		// Replace app database
 		final dbPath = await _getDatabasePath();
-		await File(dbPath).writeAsBytes(await selected.readAsBytes(), flush: true);
-		
-		final dbHelper = DatabaseHelper.instance;
-		await dbHelper.reloadDatabase();
-		
-		// Trigger refresh in the rest of the app
+		await selectedFile.copy(dbPath);
+
+		await DatabaseHelper.instance.reloadDatabase();
 		Navigator.pop(context, true);
 
 		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('✅ Database replaced successfully.')),
+		const SnackBar(content: Text('✅ Database replaced successfully!')),
 		);
-	  } catch (e) {
-		ScaffoldMessenger.of(context)
-			.showSnackBar(SnackBar(content: Text('Import failed: $e')));
-	  }
+	} catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(content: Text('Import failed: $e')),
+		);
+	}
 	}
 
   // ✅ Back to Google Drive
