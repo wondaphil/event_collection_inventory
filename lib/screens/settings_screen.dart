@@ -65,79 +65,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 	// ✅ Import database (cross-platform)
 	Future<void> _importData() async {
-	try {
+	  try {
 		final result = await FilePicker.platform.pickFiles(
-		dialogTitle: 'Select a database file',
-		type: FileType.any,
-		allowMultiple: false,
+		  dialogTitle: 'Select a database file',
+		  type: FileType.any,
+		  allowMultiple: false,
 		);
 		if (result == null) return;
 
-		final selectedPath = result.files.single.path!;
-		final selectedFile = File(selectedPath);
+		final selected = File(result.files.single.path!);
 
-		// Validate SQLite structure
+		// ✅ STEP 1: Validate database
 		bool isValid = false;
 		try {
-		final db = await openDatabase(selectedFile.path);
-		final tables = await db.rawQuery(
-			"SELECT name FROM sqlite_master WHERE type='table'",
-		);
-		await db.close();
-		final names = tables.map((t) => t['name']).toList();
-		isValid = names.contains('items') &&
-			names.contains('categories') &&
-			names.contains('stock_transactions');
-		} catch (_) {
-		isValid = false;
-		}
+		  final db = await openDatabase(selected.path);
+		  final tables = await db.rawQuery(
+			  "SELECT name FROM sqlite_master WHERE type='table'");
+		  await db.close();
+
+		  final tableNames =
+			  tables.map((t) => t['name'] as String).toList(growable: false);
+		  if (tableNames.contains('items') &&
+			  tableNames.contains('categories') &&
+			  tableNames.contains('stock_transactions')) {
+			isValid = true;
+		  }
+		} catch (_) {}
 
 		if (!isValid) {
-		ScaffoldMessenger.of(context).showSnackBar(
-			const SnackBar(content: Text('❌ Invalid database file selected.')),
-		);
-		return;
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(content: Text('❌ Invalid database file selected')),
+		  );
+		  return;
 		}
 
-		// Confirm replacement
+		// ✅ STEP 2: Confirm replacement
 		final confirm = await showDialog<bool>(
-		context: context,
-		builder: (_) => AlertDialog(
-			title: const Text('Replace Existing Database?'),
+		  context: context,
+		  builder: (_) => AlertDialog(
+			title: const Text('Replace Existing Data?'),
 			content: const Text(
-			'This will overwrite your current database with the selected file. Continue?',
-			),
+				'This will overwrite your current database with the selected file. Continue?'),
 			actions: [
-			TextButton(
-				onPressed: () => Navigator.pop(context, false),
-				child: const Text('Cancel'),
-			),
-			FilledButton(
-				style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+			  TextButton(
+				  onPressed: () => Navigator.pop(context, false),
+				  child: const Text('Cancel')),
+			  FilledButton(
+				style:
+					FilledButton.styleFrom(backgroundColor: Colors.redAccent),
 				onPressed: () => Navigator.pop(context, true),
 				child: const Text('Replace'),
-			),
+			  ),
 			],
-		),
+		  ),
 		);
 
 		if (confirm != true) return;
 
-		// Replace app database
+		// ✅ STEP 3: Replace database safely
 		final dbPath = await _getDatabasePath();
-		await selectedFile.copy(dbPath);
 
-		await DatabaseHelper.instance.reloadDatabase();
-		Navigator.pop(context, true);
+		// Close any open DB connection
+		final dbHelper = DatabaseHelper.instance;
+		await dbHelper.close();
 
-		ScaffoldMessenger.of(context).showSnackBar(
-		const SnackBar(content: Text('✅ Database replaced successfully!')),
-		);
-	} catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		SnackBar(content: Text('Import failed: $e')),
-		);
-	}
+		// Delete existing DB file first to avoid Windows lock error
+		final existing = File(dbPath);
+		if (await existing.exists()) {
+		  await existing.delete();
+		}
+
+		// Copy new DB to app location
+		await selected.copy(dbPath);
+
+		// Reload DB connection
+		await dbHelper.reloadDatabase();
+
+		// ✅ Notify and refresh
+		if (mounted) {
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(content: Text('✅ Database replaced successfully.')),
+		  );
+		  Navigator.pop(context, true);
+		}
+	  } catch (e) {
+		ScaffoldMessenger.of(context)
+			.showSnackBar(SnackBar(content: Text('Import failed: $e')));
+	  }
 	}
 
   // ✅ Back to Google Drive

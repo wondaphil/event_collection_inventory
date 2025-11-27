@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "inventory_app" "\0"
+            VALUE "CompanyName", "com.wondaphil" "\0"
+            VALUE "FileDescription", "Event Collection" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "inventory_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
+            VALUE "InternalName", "Event Collection" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2025  wondaphil@gmail.com. All rights reserved." "\0"
             VALUE "OriginalFilename", "inventory_app.exe" "\0"
-            VALUE "ProductName", "inventory_app" "\0"
+            VALUE "ProductName", "Event Collection" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

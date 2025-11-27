@@ -16,44 +16,55 @@ class DatabaseHelper {
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+
+    return await openDatabase(
+      path,
+      version: 2, // ⬅️ bumped version
+      onCreate: _createDB,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE items ADD COLUMN photo BLOB');
+        }
+      },
+    );
   }
 
   Future _createDB(Database db, int version) async {
-	  await db.execute('''
-		CREATE TABLE categories (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  name TEXT UNIQUE NOT NULL,
-		  description TEXT,
-		  createdAt TEXT NOT NULL DEFAULT (datetime('now'))
-		)
-	  ''');
+    await db.execute('''
+      CREATE TABLE categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    ''');
 
-	  await db.execute('''
-		CREATE TABLE items (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  categoryId INTEGER,
-		  code TEXT UNIQUE NOT NULL,
-		  name TEXT NOT NULL,
-		  description TEXT,
-		  createdAt TEXT NOT NULL DEFAULT (datetime('now')),
-		  updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
-		  FOREIGN KEY (categoryId) REFERENCES categories(id) ON DELETE SET NULL
-		)
-	  ''');
+    await db.execute('''
+      CREATE TABLE items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        categoryId INTEGER,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        photo BLOB,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (categoryId) REFERENCES categories(id) ON DELETE SET NULL
+      )
+    ''');
 
-	  await db.execute('''
-		CREATE TABLE stock_transactions (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  itemId INTEGER NOT NULL,
-		  quantity INTEGER NOT NULL,
-		  type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
-		  date TEXT NOT NULL DEFAULT (datetime('now')),
-		  notes TEXT,
-		  FOREIGN KEY (itemId) REFERENCES items(id) ON DELETE CASCADE
-		)
-	  ''');
-	}
+    await db.execute('''
+      CREATE TABLE stock_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        itemId INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
+        date TEXT NOT NULL DEFAULT (datetime('now')),
+        notes TEXT,
+        FOREIGN KEY (itemId) REFERENCES items(id) ON DELETE CASCADE
+      )
+    ''');
+  }
 
   // ---------- CRUD FOR ITEMS ----------
 
@@ -78,23 +89,23 @@ class DatabaseHelper {
     final db = await instance.database;
     return await db.delete('items', where: 'id = ?', whereArgs: [id]);
   }
-  
+
   // ---------- CRUD FOR CATEGORIES ----------
 
-	Future<int> insertCategory(Map<String, dynamic> row) async {
-	  final db = await instance.database;
-	  return await db.insert('categories', row);
-	}
+  Future<int> insertCategory(Map<String, dynamic> row) async {
+    final db = await instance.database;
+    return await db.insert('categories', row);
+  }
 
-	Future<List<Map<String, dynamic>>> getAllCategories() async {
-	  final db = await instance.database;
-	  return await db.query('categories', orderBy: 'name ASC');
-	}
+  Future<List<Map<String, dynamic>>> getAllCategories() async {
+    final db = await instance.database;
+    return await db.query('categories', orderBy: 'name ASC');
+  }
 
-	Future<int> deleteCategory(int id) async {
-	  final db = await instance.database;
-	  return await db.delete('categories', where: 'id = ?', whereArgs: [id]);
-	}
+  Future<int> deleteCategory(int id) async {
+    final db = await instance.database;
+    return await db.delete('categories', where: 'id = ?', whereArgs: [id]);
+  }
 
   // ---------- STOCK TRANSACTIONS ----------
 
@@ -115,18 +126,13 @@ class DatabaseHelper {
 
   Future<int> getCurrentStock(int itemId) async {
     final db = await instance.database;
-
     final result = await db.rawQuery('''
-      SELECT 
-        IFNULL(SUM(
-          CASE WHEN type = 'IN' THEN quantity 
-               WHEN type = 'OUT' THEN -quantity 
-               ELSE 0 END
-        ), 0) AS currentStock
-      FROM stock_transactions
-      WHERE itemId = ?
+      SELECT IFNULL(SUM(
+        CASE WHEN type='IN' THEN quantity 
+             WHEN type='OUT' THEN -quantity ELSE 0 END
+      ),0) AS currentStock
+      FROM stock_transactions WHERE itemId = ?
     ''', [itemId]);
-
     return result.first['currentStock'] as int;
   }
 
@@ -135,7 +141,7 @@ class DatabaseHelper {
       await _database!.close();
       _database = null;
     }
-    await database; // reopen
+    await database;
   }
 
   Future close() async {

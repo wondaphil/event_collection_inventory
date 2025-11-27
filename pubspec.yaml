@@ -43,10 +43,14 @@ dependencies:
   share_plus: ^10.0.2
   package_info_plus: ^8.0.0
   url_launcher: ^6.3.0
+  sqflite_common_ffi: ^2.3.0
+  image_picker: ^1.1.1
+  image: ^4.2.0
   
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  msix: ^3.16.12
 
 dev_dependencies:
   flutter_test:
@@ -107,3 +111,15 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+  
+msix_config:
+  display_name: Event Collection
+  publisher_display_name: Wondwossen Philemon
+  identity_name: com.wondaphil.eventcollection
+  msix_version: 1.0.0.0
+  logo_path: assets/images/logo_icon.png
+  start_menu_icon_path: assets/images/logo_icon.png
+  execution_alias: eventcollection
+  capabilities: internetClient
+  certificate_path: msix/event_collection_cert.pfx
+  certificate_password: ABCdef1234@

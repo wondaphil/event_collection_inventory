@@ -5,10 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:csv/csv.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import '../utils/ethiopian_date_helper.dart';
 import '../widgets/ethiopian_date_picker.dart';
 import '../db/database_helper.dart';
-import '../utils/ethiopian_date_helper.dart';
 
 class ItemDetailScreen extends StatefulWidget {
   final Map<String, dynamic> item;
@@ -50,6 +51,16 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
     });
   }
 
+  double _getImageAspectRatio(Uint8List photoBytes) {
+    try {
+      final decoded = img.decodeImage(photoBytes);
+      if (decoded != null && decoded.height != 0) {
+        return decoded.width / decoded.height;
+      }
+    } catch (_) {}
+    return 1.0;
+  }
+
   String _toEthiopianText(String isoString) {
     final greg = DateTime.parse(isoString);
     final eth = EthiopianDateHelper.toEthiopian(greg);
@@ -78,7 +89,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
 
     final saved = await showDialog<bool>(
       context: context,
-	  barrierDismissible: false,
+      barrierDismissible: false,
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) => AlertDialog(
           title: Text(tx == null ? 'Add Stock Transaction' : 'Edit Transaction'),
@@ -209,127 +220,121 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
       );
     }
   }
-  
+
   Future<void> _exportToCSV() async {
-	  final db = await DatabaseHelper.instance.database;
-	  final item = widget.item;
-	  final itemId = item['id'];
+    final db = await DatabaseHelper.instance.database;
+    final item = widget.item;
+    final itemId = item['id'];
 
-	  // ✅ Get category name (if available)
-	  String categoryName = '';
-	  try {
-		final cat = await db.rawQuery('''
-		  SELECT c.name AS category
-		  FROM categories c
-		  JOIN items i ON i.categoryId = c.id
-		  WHERE i.id = ?
-		''', [itemId]);
-		if (cat.isNotEmpty && cat.first['category'] != null) {
-		  categoryName = cat.first['category'].toString();
-		}
-	  } catch (_) {
-		categoryName = '';
-	  }
+    String categoryName = '';
+    try {
+      final cat = await db.rawQuery('''
+        SELECT c.name AS category
+        FROM categories c
+        JOIN items i ON i.categoryId = c.id
+        WHERE i.id = ?
+      ''', [itemId]);
+      if (cat.isNotEmpty && cat.first['category'] != null) {
+        categoryName = cat.first['category'].toString();
+      }
+    } catch (_) {
+      categoryName = '';
+    }
 
-	  // ✅ Fetch transactions
-	  final txs = await db.query(
-		'stock_transactions',
-		where: 'itemId = ?',
-		whereArgs: [itemId],
-		orderBy: 'date ASC',
-	  );
+    final txs = await db.query(
+      'stock_transactions',
+      where: 'itemId = ?',
+      whereArgs: [itemId],
+      orderBy: 'date ASC',
+    );
 
-	  if (txs.isEmpty) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('No transactions to export.')),
-		);
-		return;
-	  }
+    if (txs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No transactions to export.')),
+      );
+      return;
+    }
 
-	  // ✅ Prepare rows
-	  final rows = <List<dynamic>>[];
-	  rows.add(['Item Name', 'Category', 'Date (E.C.)', 'Notes', 'IN', 'OUT', 'STOCK']);
+    final rows = <List<dynamic>>[];
+    rows.add(['Item Name', 'Category', 'Date (E.C.)', 'Notes', 'IN', 'OUT', 'STOCK']);
 
-	  int runningStock = 0;
-	  int totalIn = 0;
-	  int totalOut = 0;
+    int runningStock = 0;
+    int totalIn = 0;
+    int totalOut = 0;
 
-	  for (final tx in txs) {
-		final dateStr = tx['date']?.toString() ?? '';
-		final greg = DateTime.tryParse(dateStr) ?? DateTime.now();
-		final eth = EthiopianDateHelper.toEthiopian(greg);
-		final ethDate =
-			'${EthiopianDateHelper.monthNamesGeez[eth['month']! - 1]} ${eth['day']}, ${eth['year']}';
+    for (final tx in txs) {
+      final dateStr = tx['date']?.toString() ?? '';
+      final greg = DateTime.tryParse(dateStr) ?? DateTime.now();
+      final eth = EthiopianDateHelper.toEthiopian(greg);
+      final ethDate =
+          '${EthiopianDateHelper.monthNamesGeez[eth['month']! - 1]} ${eth['day']}, ${eth['year']}';
 
-		final type = tx['type']?.toString() ?? '';
-		final qty = int.tryParse(tx['quantity'].toString()) ?? 0;
-		final notes = tx['notes']?.toString() ?? '';
+      final type = tx['type']?.toString() ?? '';
+      final qty = int.tryParse(tx['quantity'].toString()) ?? 0;
+      final notes = tx['notes']?.toString() ?? '';
 
-		int inQty = 0, outQty = 0;
-		if (type == 'IN') {
-		  inQty = qty;
-		  totalIn += qty;
-		  runningStock += qty;
-		} else if (type == 'OUT') {
-		  outQty = qty;
-		  totalOut += qty;
-		  runningStock -= qty;
-		}
+      int inQty = 0, outQty = 0;
+      if (type == 'IN') {
+        inQty = qty;
+        totalIn += qty;
+        runningStock += qty;
+      } else if (type == 'OUT') {
+        outQty = qty;
+        totalOut += qty;
+        runningStock -= qty;
+      }
 
-		rows.add([
-		  item['name'],
-		  categoryName,
-		  ethDate,
-		  notes,
-		  inQty == 0 ? '' : inQty,
-		  outQty == 0 ? '' : outQty,
-		  runningStock,
-		]);
-	  }
+      rows.add([
+        item['name'],
+        categoryName,
+        ethDate,
+        notes,
+        inQty == 0 ? '' : inQty,
+        outQty == 0 ? '' : outQty,
+        runningStock,
+      ]);
+    }
 
-	  // ✅ Add summary row
-	  rows.add([]);
-	  rows.add(['TOTALS', '', '', '', totalIn, totalOut, runningStock]);
+    rows.add([]);
+    rows.add(['TOTALS', '', '', '', totalIn, totalOut, runningStock]);
 
-	  // ✅ Convert to CSV (with BOM for Excel)
-	  final csvText = const ListToCsvConverter().convert(rows);
-	  final csvBytes = Uint8List.fromList([
-		0xEF, 0xBB, 0xBF, // BOM for UTF-8 Excel compatibility
-		...utf8.encode(csvText),
-	  ]);
+    final csvText = const ListToCsvConverter().convert(rows);
+    final csvBytes = Uint8List.fromList([
+      0xEF, 0xBB, 0xBF,
+      ...utf8.encode(csvText),
+    ]);
 
-	  // ✅ Write to temporary file for sharing
-	  final tempDir = await getTemporaryDirectory();
-	  final filePath = '${tempDir.path}/${item['name']}_transactions.csv';
-	  final file = File(filePath);
-	  await file.writeAsBytes(csvBytes, flush: true);
+    final tempDir = await getTemporaryDirectory();
+    final filePath = '${tempDir.path}/${item['name']}_transactions.csv';
+    final file = File(filePath);
+    await file.writeAsBytes(csvBytes, flush: true);
 
-	  // ✅ Open system share dialog
-	  await Share.shareXFiles(
-		[XFile(file.path)],
-		text: 'Transaction history for ${item['name']}',
-	  );
+    await Share.shareXFiles(
+      [XFile(file.path)],
+      text: 'Transaction history for ${item['name']}',
+    );
 
-	  ScaffoldMessenger.of(context).showSnackBar(
-		const SnackBar(content: Text('✅ CSV ready to share')),
-	  );
-	}
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('✅ CSV ready to share')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
+    final photo = item['photo'];
 
     return Scaffold(
       appBar: AppBar(
-		  title: Text(item['name'] ?? 'Item Details'),
-		  actions: [
-			IconButton(
-			  icon: const Icon(Icons.share_outlined),
-			  tooltip: 'Export to CSV',
-			  onPressed: _exportToCSV,
-			),
-		  ],
-		),
+        title: Text(item['name'] ?? 'Item Details'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share_outlined),
+            tooltip: 'Export to CSV',
+            onPressed: _exportToCSV,
+          ),
+        ],
+      ),
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -349,104 +354,146 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Code: ${item['code']}',
-                style: Theme.of(context).textTheme.titleMedium),
-            Text('Description: ${item['description'] ?? ''}'),
-            const SizedBox(height: 12),
-            Text(
-              'Current Stock: $currentStock',
-              style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                    color: Colors.teal,
-                    fontWeight: FontWeight.bold,
+      body: SingleChildScrollView(
+  padding: const EdgeInsets.all(16),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (photo != null)
+        GestureDetector(
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.all(16),
+              child: InteractiveViewer(
+                panEnabled: true,
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: AspectRatio(
+                  aspectRatio: _getImageAspectRatio(photo),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.memory(photo, fit: BoxFit.contain),
                   ),
+                ),
+              ),
             ),
-            const Divider(height: 30),
-            const Text('Transaction History',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Expanded(
-              child: transactions.isEmpty
-                  ? const Center(child: Text('No stock transactions yet'))
-                  : ListView.builder(
-					  padding: EdgeInsets.only(
-						bottom: MediaQuery.of(context).padding.bottom + 120, // 👈 enough for 2 FABs
-					  ),
-					  itemCount: transactions.length,
-					  itemBuilder: (context, index) {
-						final tx = transactions[index];
-						final isIn = tx['type'] == 'IN';
-						final qty = tx['quantity'];
-						final notes = tx['notes'] ?? '';
-						final date = _toEthiopianText(tx['date']);
-
-						return Card(
-						  margin: const EdgeInsets.symmetric(vertical: 4),
-						  child: ListTile(
-							leading: Icon(
-							  isIn ? Icons.arrow_downward : Icons.arrow_upward,
-							  color: isIn ? Colors.teal : Colors.redAccent,
-							),
-							title: Text(
-							  '${isIn ? '+' : '-'}$qty pcs',
-							  style: TextStyle(
-								color: isIn ? Colors.teal : Colors.redAccent,
-								fontWeight: FontWeight.w600,
-							  ),
-							),
-							subtitle: Text(
-							  notes.isEmpty ? date : '$date\n$notes',
-							  style: const TextStyle(height: 1.3),
-							),
-							isThreeLine: notes.isNotEmpty,
-							trailing: PopupMenuButton<String>(
-							  tooltip: 'More actions',
-							  onSelected: (value) {
-								switch (value) {
-								  case 'edit':
-									_openTransactionDialog(tx: tx);
-									break;
-								  case 'delete':
-									_deleteTransaction(tx['id'] as int);
-									break;
-								}
-							  },
-							  itemBuilder: (context) => [
-								const PopupMenuItem(
-								  value: 'edit',
-								  child: Row(
-									children: [
-									  Icon(Icons.edit_outlined, size: 20),
-									  SizedBox(width: 8),
-									  Text('Edit'),
-									],
-								  ),
-								),
-								const PopupMenuItem(
-								  value: 'delete',
-								  child: Row(
-									children: [
-									  Icon(Icons.delete_outline,
-										  color: Colors.redAccent, size: 20),
-									  SizedBox(width: 8),
-									  Text('Delete'),
-									],
-								  ),
-								),
-							  ],
-							),
-						  ),
-						);
-					  },
-					)
+          ),
+          child: Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxHeight: 180, // 👈 limit thumbnail height
+                  maxWidth: 180,
+                ),
+                child: AspectRatio(
+                  aspectRatio: _getImageAspectRatio(photo),
+                  child: Image.memory(
+                    photo,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
             ),
-          ],
+          ),
         ),
+      const SizedBox(height: 10),
+      Text('Code: ${item['code']}',
+          style: Theme.of(context).textTheme.titleMedium),
+      Text('Description: ${item['description'] ?? ''}'),
+      const SizedBox(height: 12),
+      Text(
+        'Current Stock: $currentStock',
+        style: Theme.of(context).textTheme.titleLarge!.copyWith(
+              color: Colors.teal,
+              fontWeight: FontWeight.bold,
+            ),
       ),
+      const Divider(height: 30),
+      const Text('Transaction History',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 8),
+      if (transactions.isEmpty)
+        const Center(child: Text('No stock transactions yet'))
+      else
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.only(
+			bottom: MediaQuery.of(context).padding.bottom + 180, // enough for both FABs
+		  ),
+		  itemCount: transactions.length,
+          itemBuilder: (context, index) {
+            final tx = transactions[index];
+            final isIn = tx['type'] == 'IN';
+            final qty = tx['quantity'];
+            final notes = tx['notes'] ?? '';
+            final date = _toEthiopianText(tx['date']);
+
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: Icon(
+                  isIn ? Icons.arrow_downward : Icons.arrow_upward,
+                  color: isIn ? Colors.teal : Colors.redAccent,
+                ),
+                title: Text(
+                  '${isIn ? '+' : '-'}$qty pcs',
+                  style: TextStyle(
+                    color: isIn ? Colors.teal : Colors.redAccent,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: Text(
+                  notes.isEmpty ? date : '$date\n$notes',
+                  style: const TextStyle(height: 1.3),
+                ),
+                isThreeLine: notes.isNotEmpty,
+                trailing: PopupMenuButton<String>(
+                  tooltip: 'More actions',
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'edit':
+                        _openTransactionDialog(tx: tx);
+                        break;
+                      case 'delete':
+                        _deleteTransaction(tx['id'] as int);
+                        break;
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit_outlined, size: 20),
+                          SizedBox(width: 8),
+                          Text('Edit'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline,
+                              color: Colors.redAccent, size: 20),
+                          SizedBox(width: 8),
+                          Text('Delete'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+    ],
+  ),
+),
     );
   }
 }
