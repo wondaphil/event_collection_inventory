@@ -143,9 +143,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final decoded = img.decodeImage(rawBytes);
       if (decoded != null) {
         final resized = img.copyResize(decoded, 
-										width: decoded.width > decoded.height ? 500 : null,
-										height: decoded.height >= decoded.width ? 500 : null);
-        final compressed = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
+										width: decoded.width > decoded.height ? 1600 : null,
+										height: decoded.height >= decoded.width ? 1600 : null);
+        final compressed = Uint8List.fromList(img.encodeJpg(resized, quality: 80));
         return compressed;
       }
     } catch (e) {

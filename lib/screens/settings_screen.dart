@@ -21,46 +21,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return p.join(dbPath, 'inventory.db');
   }
 
-  // ✅ Export database (cross-platform)
+  // ✅ Export database (cross-platform) with auto filename
 	Future<void> _extractData() async {
-	try {
+	  try {
 		final dbPath = await _getDatabasePath();
 		final dbFile = File(dbPath);
 
-		// Use different behavior per platform
+		// Generate timestamp-based filename
+		final now = DateTime.now();
+		final ts = "${now.year}"
+			"${now.month.toString().padLeft(2, '0')}"
+			"${now.day.toString().padLeft(2, '0')}_"
+			"${now.hour.toString().padLeft(2, '0')}"
+			"${now.minute.toString().padLeft(2, '0')}"
+			"${now.second.toString().padLeft(2, '0')}";
+
+		final autoFileName = "event_coll_inv_bkp-$ts.db";
+
+		// Platform-specific behavior
 		if (Platform.isAndroid || Platform.isIOS) {
-		// 📱 Mobile: use bytes
-		final dbBytes = await dbFile.readAsBytes();
-		final savedPath = await FilePicker.platform.saveFile(
-			dialogTitle: 'Export inventory.db',
-			fileName: 'inventory.db',
-			bytes: dbBytes,
-		);
+		  // 📱 Mobile: use bytes + FilePicker.saveFile
+		  final dbBytes = await dbFile.readAsBytes();
 
-		if (savedPath == null) return;
-		ScaffoldMessenger.of(context).showSnackBar(
-			SnackBar(content: Text('✅ Data exported to $savedPath')),
-		);
-		} else if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
-		// 💻 Desktop: native save dialog
-		final result = await FilePicker.platform.saveFile(
+		  final savedPath = await FilePicker.platform.saveFile(
 			dialogTitle: 'Export Database',
-			fileName: 'inventory.db',
-		);
+			fileName: autoFileName,      // ← Auto filename
+			bytes: dbBytes,              // ← Mobile-friendly export
+		  );
 
-		if (result == null) return; // cancelled
-		await dbFile.copy(result);
-		ScaffoldMessenger.of(context).showSnackBar(
-			SnackBar(content: Text('✅ Database exported to: $result')),
-		);
+		  if (savedPath == null) return;
+
+		  if (context.mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(content: Text('✅ Data exported to $savedPath')),
+			);
+		  }
+
+		} else if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+		  // 💻 Desktop: native save dialog (copy file)
+		  final result = await FilePicker.platform.saveFile(
+			dialogTitle: 'Export Database',
+			fileName: autoFileName,      // ← Auto filename
+		  );
+
+		  if (result == null) return;
+
+		  await dbFile.copy(result);
+
+		  if (context.mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(content: Text('✅ Database exported to: $result')),
+			);
+		  }
+
 		} else {
-		throw UnsupportedError('Unsupported platform');
+		  throw UnsupportedError('Unsupported platform');
 		}
-	} catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		SnackBar(content: Text('Export failed: $e')),
-		);
-	}
+	  } catch (e) {
+		if (context.mounted) {
+		  ScaffoldMessenger.of(context).showSnackBar(
+			SnackBar(content: Text('Export failed: $e')),
+		  );
+		}
+	  }
 	}
 
 	// ✅ Import database (cross-platform)
