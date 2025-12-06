@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'home_screen.dart'; // or whatever your main screen file is called
+import 'package:provider/provider.dart';
+import 'home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -13,11 +14,17 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(seconds: 2), () {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
-    });
+    _start();
+  }
+
+  Future<void> _start() async {
+    // Always enter app after splash delay (2.5 sec)
+    await Future.delayed(const Duration(seconds: 2));
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
   }
 
   @override
@@ -35,6 +42,11 @@ class _SplashScreenState extends State<SplashScreen> {
             ),
             const SizedBox(height: 12),
             const CircularProgressIndicator(color: Colors.teal),
+            const SizedBox(height: 16),
+            const Text(
+              "Loading...",
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            )
           ],
         ),
       ),

@@ -4,9 +4,15 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'dart:io';
-import 'screens/home_screen.dart';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
 import 'db/database_helper.dart';
 import 'screens/splash_screen.dart';
+import 'utils/sync_controller.dart';
+
+import 'package:provider/provider.dart';
 
 final GoogleSignIn googleSignIn = GoogleSignIn(
   scopes: <String>[
@@ -17,6 +23,12 @@ final GoogleSignIn googleSignIn = GoogleSignIn(
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 🔥 Initialize Firebase before anything else
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // 🖥️ Desktop SQLite initialization
   if (!kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.macOS ||
@@ -24,14 +36,22 @@ void main() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
 
-    // 👇 This line fixes "Access denied" by setting safe working directory
     final dir = await getApplicationSupportDirectory();
     Directory.current = dir.path;
   }
 
-  await DatabaseHelper.instance.database; // ensure DB is ready
+  // 🗄️ Ensure SQLite DB is ready before app loads
+  await DatabaseHelper.instance.database;
 
-  runApp(const InventoryApp());
+  // 🌐 Register SyncController globally for the whole app
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SyncController()),
+      ],
+      child: const InventoryApp(),
+    ),
+  );
 }
 
 class InventoryApp extends StatelessWidget {
@@ -53,8 +73,8 @@ class InventoryApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      themeMode: ThemeMode.system, // follow system dark/light mode
-      home: const SplashScreen(),
+      themeMode: ThemeMode.system,
+      home: const SplashScreen(), // 👈 Sync happens here automatically
     );
   }
 }

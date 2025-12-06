@@ -1,5 +1,10 @@
+// lib/db/database_helper.dart
+import 'dart:typed_data';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'database_migration.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -7,35 +12,47 @@ class DatabaseHelper {
 
   DatabaseHelper._init();
 
+  static const int _dbVersion = 11; // bump after adding photoHash
+
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('inventory.db');
+    _database = await _initDB("inventory.db");
     return _database!;
   }
 
-  Future<Database> _initDB(String filePath) async {
+  Future<Database> _initDB(String dbName) async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, filePath);
+    final path = join(dbPath, dbName);
 
-    return await openDatabase(
+    return openDatabase(
       path,
-      version: 2, // ⬅️ bumped version
+      version: _dbVersion,
       onCreate: _createDB,
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await db.execute('ALTER TABLE items ADD COLUMN photo BLOB');
-        }
+        await DatabaseMigration.runMigrations(db);
+      },
+      onOpen: (db) async {
+        await DatabaseMigration.runMigrations(db);
       },
     );
   }
 
-  Future _createDB(Database db, int version) async {
+  // SHA-1 helper
+  String _hash(Uint8List? bytes) {
+    if (bytes == null || bytes.isEmpty) return "";
+    return sha1.convert(bytes).toString();
+  }
+
+  Future<void> _createDB(Database db, int version) async {
     await db.execute('''
       CREATE TABLE categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
         description TEXT,
-        createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+        createdAt TEXT NOT NULL,
+        updated_at TEXT,
+        uuid TEXT,
+        deleted INTEGER DEFAULT 0
       )
     ''');
 
@@ -47,8 +64,12 @@ class DatabaseHelper {
         name TEXT NOT NULL,
         description TEXT,
         photo BLOB,
-        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
-        updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+        photoHash TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        uuid TEXT,
+        category_uuid TEXT,
+        deleted INTEGER DEFAULT 0,
         FOREIGN KEY (categoryId) REFERENCES categories(id) ON DELETE SET NULL
       )
     ''');
@@ -56,86 +77,167 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE stock_transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        itemId INTEGER NOT NULL,
+        itemId INTEGER,
         quantity INTEGER NOT NULL,
-        type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
-        date TEXT NOT NULL DEFAULT (datetime('now')),
+        type TEXT CHECK(type IN ('IN','OUT')),
+        date TEXT NOT NULL,
         notes TEXT,
-        FOREIGN KEY (itemId) REFERENCES items(id) ON DELETE CASCADE
+        uuid TEXT,
+        item_uuid TEXT,
+        updated_at TEXT,
+        deleted INTEGER DEFAULT 0,
+        FOREIGN KEY (itemId) REFERENCES items(id) ON DELETE SET NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS device_info (
+        device_id TEXT PRIMARY KEY
+      )
+    ''');
+
+    await _createIndexes(db);
   }
 
-  // ---------- CRUD FOR ITEMS ----------
+  Future<void> _createIndexes(Database db) async {
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_categories_uuid ON categories(uuid)");
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_items_uuid ON items(uuid)");
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_items_category_uuid ON items(category_uuid)");
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_uuid ON stock_transactions(uuid)");
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_item_uuid ON stock_transactions(item_uuid)");
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_itemId ON stock_transactions(itemId)");
+  }
 
+  // ---------------------------------------------------------------------------
+  // ITEMS
+  // ---------------------------------------------------------------------------
   Future<int> insertItem(Map<String, dynamic> row) async {
-    final db = await instance.database;
-    return await db.insert('items', row);
-  }
-
-  Future<List<Map<String, dynamic>>> getAllItems() async {
-    final db = await instance.database;
-    return await db.query('items', orderBy: 'createdAt DESC');
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch.toString();
+    final photo = row["photo"] as Uint8List?;
+    row["createdAt"] = now;
+    row["updatedAt"] = now;
+    row["photoHash"] = _hash(photo);
+    return db.insert("items", row);
   }
 
   Future<int> updateItem(Map<String, dynamic> row) async {
-    final db = await instance.database;
-    int id = row['id'];
-    row['updatedAt'] = DateTime.now().toIso8601String();
-    return await db.update('items', row, where: 'id = ?', whereArgs: [id]);
+    final db = await database;
+    final id = row["id"];
+    final now = DateTime.now().millisecondsSinceEpoch.toString();
+    final photo = row["photo"] as Uint8List?;
+
+    row["updatedAt"] = now;
+    row["photoHash"] = _hash(photo);
+
+    return db.update("items", row, where: "id = ?", whereArgs: [id]);
   }
 
-  Future<int> deleteItem(int id) async {
-    final db = await instance.database;
-    return await db.delete('items', where: 'id = ?', whereArgs: [id]);
-  }
+  Future<int> softDeleteItem(int id) async {
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch.toString();
 
-  // ---------- CRUD FOR CATEGORIES ----------
-
-  Future<int> insertCategory(Map<String, dynamic> row) async {
-    final db = await instance.database;
-    return await db.insert('categories', row);
-  }
-
-  Future<List<Map<String, dynamic>>> getAllCategories() async {
-    final db = await instance.database;
-    return await db.query('categories', orderBy: 'name ASC');
-  }
-
-  Future<int> deleteCategory(int id) async {
-    final db = await instance.database;
-    return await db.delete('categories', where: 'id = ?', whereArgs: [id]);
-  }
-
-  // ---------- STOCK TRANSACTIONS ----------
-
-  Future<int> addStockTransaction(Map<String, dynamic> row) async {
-    final db = await instance.database;
-    return await db.insert('stock_transactions', row);
-  }
-
-  Future<List<Map<String, dynamic>>> getStockHistory(int itemId) async {
-    final db = await instance.database;
-    return await db.query(
-      'stock_transactions',
-      where: 'itemId = ?',
-      whereArgs: [itemId],
-      orderBy: 'date DESC',
+    return db.update(
+      "items",
+      {"deleted": 1, "updatedAt": now},
+      where: "id = ?",
+      whereArgs: [id],
     );
   }
 
-  Future<int> getCurrentStock(int itemId) async {
-    final db = await instance.database;
-    final result = await db.rawQuery('''
-      SELECT IFNULL(SUM(
-        CASE WHEN type='IN' THEN quantity 
-             WHEN type='OUT' THEN -quantity ELSE 0 END
-      ),0) AS currentStock
-      FROM stock_transactions WHERE itemId = ?
-    ''', [itemId]);
-    return result.first['currentStock'] as int;
+  Future<List<Map<String, dynamic>>> getAllItemsRaw() async {
+    final db = await database;
+    return db.query("items");
   }
 
+  Future<List<Map<String, dynamic>>> getAllItems() async {
+    final db = await database;
+    return db.query(
+      "items",
+      where: "deleted = 0",
+      orderBy: "name COLLATE NOCASE ASC",
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // CATEGORIES
+  // ---------------------------------------------------------------------------
+  Future<int> insertCategory(Map<String, dynamic> row) async {
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch.toString();
+
+    row["createdAt"] = now;
+    row["updated_at"] = now;
+    row["deleted"] = 0;
+
+    return db.insert("categories", row);
+  }
+
+  Future<int> softDeleteCategory(int id) async {
+    final db = await database;
+    return db.update(
+      "categories",
+      {
+        "deleted": 1,
+        "updated_at": DateTime.now().millisecondsSinceEpoch.toString(),
+      },
+      where: "id = ?",
+      whereArgs: [id],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getAllCategoriesRaw() async {
+    final db = await database;
+    return db.query("categories");
+  }
+
+  Future<List<Map<String, dynamic>>> getAllCategories() async {
+    final db = await database;
+    return db.query(
+      "categories",
+      where: "deleted = 0",
+      orderBy: "name ASC",
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // TRANSACTIONS
+  // ---------------------------------------------------------------------------
+  Future<int> addStockTransaction(Map<String, dynamic> row) async {
+    final db = await database;
+    row["updated_at"] = DateTime.now().millisecondsSinceEpoch.toString();
+    return db.insert("stock_transactions", row);
+  }
+
+  Future<int> softDeleteTransaction(int id) async {
+    final db = await database;
+    return db.update(
+      "stock_transactions",
+      {
+        "deleted": 1,
+        "updated_at": DateTime.now().millisecondsSinceEpoch.toString(),
+      },
+      where: "id = ?",
+      whereArgs: [id],
+    );
+  }
+  
+  Future<int> getCurrentStock(int itemId) async {
+	  final db = await database;
+	  final result = await db.rawQuery('''
+		SELECT IFNULL(SUM(
+		  CASE WHEN type='IN' THEN quantity
+			   WHEN type='OUT' THEN -quantity
+			   ELSE 0 END
+		),0) AS currentStock
+		FROM stock_transactions
+		WHERE itemId = ? AND deleted = 0
+	  ''', [itemId]);
+
+	  return result.first["currentStock"] as int;
+	}
+
+  // ---------------------------------------------------------------------------
   Future<void> reloadDatabase() async {
     if (_database != null) {
       await _database!.close();
@@ -145,7 +247,7 @@ class DatabaseHelper {
   }
 
   Future close() async {
-    final db = await instance.database;
+    final db = await database;
     db.close();
   }
 }

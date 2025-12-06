@@ -1,10 +1,17 @@
+// lib/screens/add_item_screen.dart
+
 import 'dart:typed_data';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+import 'package:crypto/crypto.dart';
+import 'dart:convert';
+
 import '../db/database_helper.dart';
 
 class AddItemScreen extends StatefulWidget {
@@ -15,14 +22,13 @@ class AddItemScreen extends StatefulWidget {
 }
 
 class _AddItemScreenState extends State<AddItemScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _codeCtrl = TextEditingController();
-  final _nameCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
+  final TextEditingController codeCtrl = TextEditingController();
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController descCtrl = TextEditingController();
 
+  Uint8List? photoBytes;
+  int? categoryId;
   List<Map<String, dynamic>> categories = [];
-  int? selectedCategoryId;
-  Uint8List? _photoBytes;
 
   @override
   void initState() {
@@ -31,186 +37,228 @@ class _AddItemScreenState extends State<AddItemScreen> {
   }
 
   Future<void> _loadCategories() async {
-    final result = await DatabaseHelper.instance.getAllCategories();
+    final db = DatabaseHelper.instance;
+    final result = await db.getAllCategories();
     setState(() => categories = result);
   }
 
-  Future<void> _pickPhoto() async {
-    showModalBottomSheet(
+  // ---------------------------------------------------------------------------
+  // HASH
+  // ---------------------------------------------------------------------------
+  String _computeHash(Uint8List? bytes) {
+    if (bytes == null || bytes.isEmpty) return "";
+    return sha1.convert(bytes).toString();
+  }
+
+  // ---------------------------------------------------------------------------
+  // IMAGE PICKING
+  // ---------------------------------------------------------------------------
+  Future<Uint8List?> _pickPhotoDialog() async {
+    return await showModalBottomSheet<Uint8List?>(
       context: context,
-      builder: (_) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Pick from Gallery'),
-              onTap: () async {
-                Navigator.pop(context);
-                await _pickFromGallery();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Take Photo'),
-              onTap: () async {
-                Navigator.pop(context);
-                await _pickFromCamera();
-              },
-            ),
-          ],
-        ),
+      builder: (_) => Wrap(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('Pick from Gallery'),
+            onTap: () async => Navigator.pop(context, await _pickFromGallery()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.camera_alt_outlined),
+            title: const Text('Take Photo'),
+            onTap: () async => Navigator.pop(context, await _pickFromCamera()),
+          ),
+        ],
       ),
     );
   }
 
-  Future<void> _pickFromGallery() async {
+  Future<Uint8List?> _pickFromGallery() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowCompression: false,
       );
-      if (result == null) return;
+
+      if (result == null) return null;
 
       Uint8List? rawBytes;
+
       if (result.files.single.bytes != null) {
         rawBytes = result.files.single.bytes;
       } else if (result.files.single.path != null) {
         final pickedFile = File(result.files.single.path!);
         final tempDir = await getTemporaryDirectory();
-        final safeCopy = File('${tempDir.path}/${pickedFile.uri.pathSegments.last}');
+        final safeCopy =
+            File('${tempDir.path}/${pickedFile.uri.pathSegments.last}');
         await pickedFile.copy(safeCopy.path);
         rawBytes = await safeCopy.readAsBytes();
       }
-      await _processImage(rawBytes);
-    } catch (e) {
-      debugPrint('❌ Gallery pick failed: $e');
+
+      return _processImage(rawBytes);
+    } catch (_) {
+      return null;
     }
   }
 
-  Future<void> _pickFromCamera() async {
+  Future<Uint8List?> _pickFromCamera() async {
     try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(source: ImageSource.camera);
-      if (picked == null) return;
+      final picked =
+          await ImagePicker().pickImage(source: ImageSource.camera);
+
+      if (picked == null) return null;
+
       final rawBytes = await picked.readAsBytes();
-      await _processImage(rawBytes);
-    } catch (e) {
-      debugPrint('❌ Camera pick failed: $e');
+      return _processImage(rawBytes);
+    } catch (_) {
+      return null;
     }
   }
 
-  Future<void> _processImage(Uint8List? rawBytes) async {
-    if (rawBytes == null) return;
+  Uint8List? _processImage(Uint8List? rawBytes) {
+    if (rawBytes == null) return null;
+
     try {
       final decoded = img.decodeImage(rawBytes);
       if (decoded != null) {
-        final resized = img.copyResize(decoded, 
-										width: decoded.width > decoded.height ? 1600 : null,
-										height: decoded.height >= decoded.width ? 1600 : null,);
-        final compressed = Uint8List.fromList(img.encodeJpg(resized, quality: 80));
-        setState(() => _photoBytes = compressed);
+        final resized = img.copyResize(
+          decoded,
+          width: decoded.width > decoded.height ? 1600 : null,
+          height: decoded.height >= decoded.width ? 1600 : null,
+        );
+        return Uint8List.fromList(img.encodeJpg(resized, quality: 80));
       }
-    } catch (e) {
-      debugPrint('❌ Image processing failed: $e');
-    }
+    } catch (_) {}
+
+    return rawBytes;
   }
 
+  // ---------------------------------------------------------------------------
+  // SAVE (with correct "photo_hash")
+  // ---------------------------------------------------------------------------
   Future<void> _saveItem() async {
-    if (_formKey.currentState!.validate()) {
-      await DatabaseHelper.instance.insertItem({
-        'categoryId': selectedCategoryId,
-        'code': _codeCtrl.text,
-        'name': _nameCtrl.text,
-        'description': _descCtrl.text,
-        'photo': _photoBytes,
-        'createdAt': DateTime.now().toIso8601String(),
-        'updatedAt': DateTime.now().toIso8601String(),
-      });
-      Navigator.pop(context);
+    if (nameCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Code & Name are required")),
+      );
+      return;
     }
+
+    final db = DatabaseHelper.instance;
+    final uuid = const Uuid().v4();
+    final now = DateTime.now().millisecondsSinceEpoch.toString();
+
+    String? categoryUuid;
+    if (categoryId != null) {
+      final rows = await db.database.then((dbConn) => dbConn.query(
+            "categories",
+            where: "id=?",
+            whereArgs: [categoryId],
+            limit: 1,
+          ));
+      if (rows.isNotEmpty) {
+        categoryUuid = rows.first["uuid"] as String?;
+      }
+    }
+
+    await db.insertItem({
+      "uuid": uuid,
+      "code": codeCtrl.text.trim(),
+      "name": nameCtrl.text.trim(),
+      "description": descCtrl.text.trim(),
+      "photo": photoBytes,
+      "photo_hash": _computeHash(photoBytes), // 🔥 FIXED: correct DB column
+      "createdAt": now,
+      "updatedAt": now,
+      "categoryId": categoryId,
+      "category_uuid": categoryUuid,
+      "deleted": 0,
+    });
+
+    Navigator.pop(context, true);
   }
 
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Add Item')),
-      body: Padding(
+      appBar: AppBar(title: const Text("Add Item")),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              Center(
-                child: GestureDetector(
-                  onTap: _pickPhoto,
-                  child: _photoBytes != null
-                      ? Stack(
-                          alignment: Alignment.topRight,
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.memory(
-                                _photoBytes!,
-                                width: 120,
-                                height: 120,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close_rounded,
-                                  color: Colors.redAccent),
-                              onPressed: () =>
-                                  setState(() => _photoBytes = null),
-                            ),
-                          ],
-                        )
-                      : Container(
-                          width: 120,
-                          height: 120,
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade300,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.add_a_photo_outlined,
-                              size: 40, color: Colors.grey),
-                        ),
+        child: Column(
+          children: [
+            GestureDetector(
+              onTap: () async {
+                final picked = await _pickPhotoDialog();
+                if (picked != null) setState(() => photoBytes = picked);
+              },
+              child: photoBytes != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(
+                        photoBytes!,
+                        width: 140,
+                        height: 140,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : Container(
+                      width: 140,
+                      height: 140,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.add_a_photo_outlined,
+                          size: 40, color: Colors.grey),
+                    ),
+            ),
+
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: codeCtrl,
+              decoration: const InputDecoration(labelText: 'Code'),
+            ),
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Name'),
+            ),
+            TextField(
+              controller: descCtrl,
+              decoration: const InputDecoration(labelText: 'Description'),
+            ),
+
+            const SizedBox(height: 12),
+
+            DropdownButtonFormField<int>(
+              value: categoryId,
+              decoration: const InputDecoration(labelText: "Category"),
+              items: [
+                const DropdownMenuItem<int>(
+                  value: null,
+                  child: Text("None"),
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _codeCtrl,
-                decoration: const InputDecoration(labelText: 'Item Code'),
-                validator: (v) => v!.isEmpty ? 'Enter code' : null,
-              ),
-              TextFormField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(labelText: 'Item Name'),
-                validator: (v) => v!.isEmpty ? 'Enter name' : null,
-              ),
-              TextFormField(
-                controller: _descCtrl,
-                decoration: const InputDecoration(labelText: 'Description'),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                value: selectedCategoryId,
-                decoration: const InputDecoration(labelText: 'Category'),
-                items: categories.map((c) {
-                  return DropdownMenuItem<int>(
-                    value: c['id'] as int,
+                ...categories.map(
+                  (c) => DropdownMenuItem<int>(
+                    value: c['id'],
                     child: Text(c['name']),
-                  );
-                }).toList(),
-                onChanged: (value) => setState(() => selectedCategoryId = value),
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _saveItem,
-                icon: const Icon(Icons.save),
-                label: const Text('Save'),
-              ),
-            ],
-          ),
+                  ),
+                ),
+              ],
+              onChanged: (v) => setState(() => categoryId = v),
+            ),
+
+            const SizedBox(height: 20),
+
+            FilledButton.icon(
+              icon: const Icon(Icons.check),
+              label: const Text("Save Item"),
+              onPressed: _saveItem,
+            ),
+          ],
         ),
       ),
     );

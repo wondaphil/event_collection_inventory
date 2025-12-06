@@ -5,9 +5,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:sqflite/sqflite.dart';
+
 import '../db/database_helper.dart';
 import '../utils/drive_backup.dart';
 import 'about_screen.dart';
+import 'sync_logs_screen.dart';   // 👈 NEW
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -21,258 +23,285 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return p.join(dbPath, 'inventory.db');
   }
 
-  // ✅ Export database (cross-platform) with auto filename
-	Future<void> _extractData() async {
-	  try {
-		final dbPath = await _getDatabasePath();
-		final dbFile = File(dbPath);
+  // ---------------------------------------------------------------------------
+  //  EXPORT DATABASE
+  // ---------------------------------------------------------------------------
+  Future<void> _extractData() async {
+    try {
+      final dbPath = await _getDatabasePath();
+      final dbFile = File(dbPath);
 
-		// Generate timestamp-based filename
-		final now = DateTime.now();
-		final ts = "${now.year}"
-			"${now.month.toString().padLeft(2, '0')}"
-			"${now.day.toString().padLeft(2, '0')}_"
-			"${now.hour.toString().padLeft(2, '0')}"
-			"${now.minute.toString().padLeft(2, '0')}"
-			"${now.second.toString().padLeft(2, '0')}";
+      final now = DateTime.now();
+      final ts = "${now.year}"
+          "${now.month.toString().padLeft(2, '0')}"
+          "${now.day.toString().padLeft(2, '0')}_"
+          "${now.hour.toString().padLeft(2, '0')}"
+          "${now.minute.toString().padLeft(2, '0')}"
+          "${now.second.toString().padLeft(2, '0')}";
 
-		final autoFileName = "event_coll_inv_bkp-$ts.db";
+      final autoFileName = "event_coll_inv_bkp-$ts.db";
 
-		// Platform-specific behavior
-		if (Platform.isAndroid || Platform.isIOS) {
-		  // 📱 Mobile: use bytes + FilePicker.saveFile
-		  final dbBytes = await dbFile.readAsBytes();
+      if (Platform.isAndroid || Platform.isIOS) {
+        final dbBytes = await dbFile.readAsBytes();
 
-		  final savedPath = await FilePicker.platform.saveFile(
-			dialogTitle: 'Export Database',
-			fileName: autoFileName,      // ← Auto filename
-			bytes: dbBytes,              // ← Mobile-friendly export
-		  );
+        final savedPath = await FilePicker.platform.saveFile(
+          dialogTitle: 'Export Database',
+          fileName: autoFileName,
+          bytes: dbBytes,
+        );
 
-		  if (savedPath == null) return;
+        if (savedPath == null) return;
 
-		  if (context.mounted) {
-			ScaffoldMessenger.of(context).showSnackBar(
-			  SnackBar(content: Text('✅ Data exported to $savedPath')),
-			);
-		  }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Data exported to $savedPath')),
+        );
+      } else {
+        final result = await FilePicker.platform.saveFile(
+          dialogTitle: 'Export Database',
+          fileName: autoFileName,
+        );
 
-		} else if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
-		  // 💻 Desktop: native save dialog (copy file)
-		  final result = await FilePicker.platform.saveFile(
-			dialogTitle: 'Export Database',
-			fileName: autoFileName,      // ← Auto filename
-		  );
+        if (result == null) return;
 
-		  if (result == null) return;
+        await dbFile.copy(result);
 
-		  await dbFile.copy(result);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Database exported to: $result')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
 
-		  if (context.mounted) {
-			ScaffoldMessenger.of(context).showSnackBar(
-			  SnackBar(content: Text('✅ Database exported to: $result')),
-			);
-		  }
+  // ---------------------------------------------------------------------------
+  //  IMPORT DATABASE
+  // ---------------------------------------------------------------------------
+  Future<void> _importData() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Select a database file',
+        type: FileType.any,
+        allowMultiple: false,
+      );
+      if (result == null) return;
 
-		} else {
-		  throw UnsupportedError('Unsupported platform');
-		}
-	  } catch (e) {
-		if (context.mounted) {
-		  ScaffoldMessenger.of(context).showSnackBar(
-			SnackBar(content: Text('Export failed: $e')),
-		  );
-		}
-	  }
-	}
+      final selected = File(result.files.single.path!);
 
-	// ✅ Import database (cross-platform)
-	Future<void> _importData() async {
-	  try {
-		final result = await FilePicker.platform.pickFiles(
-		  dialogTitle: 'Select a database file',
-		  type: FileType.any,
-		  allowMultiple: false,
-		);
-		if (result == null) return;
+      bool isValid = false;
+      try {
+        final db = await openDatabase(selected.path);
+        final tables = await db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='table'");
+        await db.close();
 
-		final selected = File(result.files.single.path!);
+        final tableNames =
+            tables.map((t) => t['name'] as String).toList(growable: false);
+        if (tableNames.contains('items') &&
+            tableNames.contains('categories') &&
+            tableNames.contains('stock_transactions')) {
+          isValid = true;
+        }
+      } catch (_) {}
 
-		// ✅ STEP 1: Validate database
-		bool isValid = false;
-		try {
-		  final db = await openDatabase(selected.path);
-		  final tables = await db.rawQuery(
-			  "SELECT name FROM sqlite_master WHERE type='table'");
-		  await db.close();
+      if (!isValid) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('❌ Invalid database file selected')),
+        );
+        return;
+      }
 
-		  final tableNames =
-			  tables.map((t) => t['name'] as String).toList(growable: false);
-		  if (tableNames.contains('items') &&
-			  tableNames.contains('categories') &&
-			  tableNames.contains('stock_transactions')) {
-			isValid = true;
-		  }
-		} catch (_) {}
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Replace Existing Data?'),
+          content: const Text(
+              'This will overwrite your current database with the selected file. Continue?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
 
-		if (!isValid) {
-		  ScaffoldMessenger.of(context).showSnackBar(
-			const SnackBar(content: Text('❌ Invalid database file selected')),
-		  );
-		  return;
-		}
+      if (confirm != true) return;
 
-		// ✅ STEP 2: Confirm replacement
-		final confirm = await showDialog<bool>(
-		  context: context,
-		  builder: (_) => AlertDialog(
-			title: const Text('Replace Existing Data?'),
-			content: const Text(
-				'This will overwrite your current database with the selected file. Continue?'),
-			actions: [
-			  TextButton(
-				  onPressed: () => Navigator.pop(context, false),
-				  child: const Text('Cancel')),
-			  FilledButton(
-				style:
-					FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-				onPressed: () => Navigator.pop(context, true),
-				child: const Text('Replace'),
-			  ),
-			],
-		  ),
-		);
+      final dbPath = await _getDatabasePath();
 
-		if (confirm != true) return;
+      final dbHelper = DatabaseHelper.instance;
+      await dbHelper.close();
 
-		// ✅ STEP 3: Replace database safely
-		final dbPath = await _getDatabasePath();
+      final existing = File(dbPath);
+      if (await existing.exists()) await existing.delete();
 
-		// Close any open DB connection
-		final dbHelper = DatabaseHelper.instance;
-		await dbHelper.close();
+      await selected.copy(dbPath);
+      await dbHelper.reloadDatabase();
 
-		// Delete existing DB file first to avoid Windows lock error
-		final existing = File(dbPath);
-		if (await existing.exists()) {
-		  await existing.delete();
-		}
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Database replaced successfully.')),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    }
+  }
 
-		// Copy new DB to app location
-		await selected.copy(dbPath);
-
-		// Reload DB connection
-		await dbHelper.reloadDatabase();
-
-		// ✅ Notify and refresh
-		if (mounted) {
-		  ScaffoldMessenger.of(context).showSnackBar(
-			const SnackBar(content: Text('✅ Database replaced successfully.')),
-		  );
-		  Navigator.pop(context, true);
-		}
-	  } catch (e) {
-		ScaffoldMessenger.of(context)
-			.showSnackBar(SnackBar(content: Text('Import failed: $e')));
-	  }
-	}
-
-  // ✅ Back to Google Drive
+  // ---------------------------------------------------------------------------
+  //  DRIVE BACKUP / RESTORE
+  // ---------------------------------------------------------------------------
   Future<void> _backuoDataToDrive() async {
-	  try {
-		await DriveBackup.uploadBackup();
-		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('✅ Backup uploaded to Google Drive')),
-		);
-	  } catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(content: Text('Backup failed: $e')),
-		);
-	  }
-	}
-	
-  // ✅ Restore from Google Drive
+    try {
+      await DriveBackup.uploadBackup();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Backup uploaded to Google Drive')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Backup failed: $e')),
+      );
+    }
+  }
+
   Future<void> _restoreDataFromDrive() async {
-	  try {
-		await DriveBackup.restoreBackup();
-		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('✅ Restored from Google Drive')),
-		);
-	  } catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(content: Text('Restore failed: $e')),
-		);
-	  }
-	}
+    try {
+      await DriveBackup.restoreBackup();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Restored from Google Drive')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Restore failed: $e')),
+      );
+    }
+  }
 
-
+  // ---------------------------------------------------------------------------
+  //  UI
+  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
+
+            // --------------------------
+            // SYNC LOGS CARD  (NEW)
+            // --------------------------
             Card(
               color: cardColor,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: ListTile(
+                leading: const Icon(Icons.sync, color: Colors.teal),
+                title: const Text('Sync Logs'),
+                subtitle: const Text('View last sync timestamps and log history'),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SyncLogsScreen()),
+                  );
+                },
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // --------------------------
+            // EXISTING CARDS
+            // --------------------------
+            Card(
+              color: cardColor,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: ListTile(
                 leading: const Icon(Icons.file_download_outlined, color: Colors.teal),
                 title: const Text('Extract Data'),
-                subtitle: const Text('Choose where to save your database (.db) file'),
+                subtitle:
+                    const Text('Choose where to save your database (.db) file'),
                 onTap: _extractData,
               ),
             ),
+
             const SizedBox(height: 12),
+
             Card(
               color: cardColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: ListTile(
                 leading: const Icon(Icons.file_upload_outlined, color: Colors.blue),
                 title: const Text('Import Data'),
-                subtitle: const Text('Select a .db file to replace current data'),
+                subtitle:
+                    const Text('Select a .db file to replace current data'),
                 onTap: _importData,
               ),
             ),
-			Card(
-			  color: cardColor,
-			  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-			  child: ListTile(
-				leading: const Icon(Icons.cloud_upload_outlined, color: Colors.indigo),
-				title: const Text('Backup to Google Drive'),
-				subtitle: const Text('The database (.db) file will be backed up'),
+
+            Card(
+              color: cardColor,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: ListTile(
+                leading:
+                    const Icon(Icons.cloud_upload_outlined, color: Colors.indigo),
+                title: const Text('Backup to Google Drive'),
+                subtitle: const Text('The database (.db) file will be backed up'),
                 onTap: _backuoDataToDrive,
-			  ),
-			),
-			const SizedBox(height: 12),
-			Card(
-			  color: cardColor,
-			  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-			  child: ListTile(
-				leading: const Icon(Icons.cloud_download_outlined, color: Colors.indigo),
-				title: const Text('Restore from Google Drive'),
-				subtitle: const Text('The database (.db) file will be restored'),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            Card(
+              color: cardColor,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: ListTile(
+                leading: const Icon(Icons.cloud_download_outlined,
+                    color: Colors.indigo),
+                title: const Text('Restore from Google Drive'),
+                subtitle: const Text('The database (.db) file will be restored'),
                 onTap: _restoreDataFromDrive,
-			  ),
-			),
-			const SizedBox(height: 12),
-			Card(
-			  color: cardColor,
-			  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-			  child: ListTile(
-				leading: const Icon(Icons.info_outline, color: Colors.grey),
-				title: const Text('About'),
-				subtitle: const Text('App version and developer info'),
-				onTap: () {
-				  Navigator.push(
-					context,
-					MaterialPageRoute(builder: (_) => const AboutScreen()),
-				  );
-				},
-			  ),
-			),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            Card(
+              color: cardColor,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: ListTile(
+                leading: const Icon(Icons.info_outline, color: Colors.grey),
+                title: const Text('About'),
+                subtitle: const Text('App version and developer info'),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AboutScreen()),
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),
